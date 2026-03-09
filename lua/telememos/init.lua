@@ -105,8 +105,9 @@ M.sync_memo_to_api = function(bufnr, memo_id, memo)
 
   -- If we have an ID, we target the specific resource and use PATCH
   local pattern = "/" .. "(.*)"
+  local head = nil
   if memo_id then
-    local head = string.match(memo_id, pattern)
+    head = string.match(memo_id, pattern)
   end
   local url = memo_id and (api_url .. "/" .. head) or api_url
   local method = memo_id and "patch" or "post"
