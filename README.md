@@ -8,6 +8,7 @@ Features:
 - [x] Create a new memo
 - [x] Search using `?filter` [api](https://usememos.com/docs/api/memoservice/ListMemos)
 - [x] Update memo contents as if writing to a buffer
+- [x] Delete memo (unlink buffer)
 
 Install with `Lazy`:
 
@@ -81,4 +82,3 @@ To actually override options pass them as `config` parameter.
 ## Todos
 
 - [ ] Open new buffer & save as memo as a single command
-- [ ] Way to distinguish buffers linked to memos from your typical open files
