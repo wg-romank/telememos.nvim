@@ -7,6 +7,31 @@ M.last_results = {}
 M.last_processed_prompt = ""
 M.debounce_timer = vim.loop.new_timer()
 
+local default_opts = {
+  name_prefix = '[M]',
+  max_header_length = 20,
+  default_visibility = 'PUBLIC',
+  default_state = 'STATE_UNSPECIFIED',
+  debounce_ms = 250,
+  min_characters = 3,
+  default_layout = {
+    previewer = true,
+    layout_strategy = 'vertical',
+    layout_config = {
+      width = 0.8,
+      preview_cutoff = 0,
+      height = 0.8,
+      prompt_position = "top",
+    },
+    sorting_strategy = "ascending",
+  }
+}
+
+M.setup = function(opts)
+  local opts = vim.tbl_deep_extend("force", default_opts, opts)
+  M.config = opts or {}
+end
+
 local function fetch_memos(search)
   local curl = require('plenary.curl')
   local url = M.MEMOS_URL .. '/api/v1/memos'
@@ -95,13 +120,31 @@ local function memos_entry_maker(data)
   }
 end
 
-M.sync_memo_to_api = function(bufnr, memo_id, memo)
+local function setup_memo_buffer(bufnr, entry)
+  local title = entry.display:sub(1, M.config.max_header_length)
+  vim.api.nvim_buf_set_name(bufnr, M.config.name_prefix .. (entry.heading or title))
+  vim.api.nvim_buf_set_option(bufnr, "filetype", "markdown") -- TODO: buftype
+  vim.api.nvim_buf_set_option(bufnr, "bufhidden", "wipe") -- delete on close
+  vim.b[bufnr].memo_id = entry.memo_id -- linking memo using its name
+
+  vim.b[bufnr].autocmd_id = vim.api.nvim_create_autocmd("BufWriteCmd", {
+    buffer = bufnr,
+    callback = function()
+      M.save_memo(bufnr, entry.value)
+    end,
+  })
+end
+
+M.save_memo = function(bufnr, memo)
   local curl = require('plenary.curl')
   local api_url = M.MEMOS_URL .. '/api/v1/memos'
   local token = M.API_TOKEN
 
-  local visibility = memo.visibility or 'PUBLIC'
-  local state = memo.state or 'STATE_UNSPECIFIED'
+  local visibility = memo and memo.visibility or 'PUBLIC'
+  local state = memo and memo.state or 'STATE_UNSPECIFIED'
+
+  local bufnr = bufnr or vim.api.nvim_get_current_buf()
+  local memo_id = vim.b[bufnr].memo_id
 
   -- If we have an ID, we target the specific resource and use PATCH
   local pattern = "/" .. "(.*)"
@@ -125,39 +168,23 @@ M.sync_memo_to_api = function(bufnr, memo_id, memo)
     callback = function(res)
       vim.schedule(function()
         if res.status >= 200 and res.status < 300 then
-          if memo_id then
-            vim.api.nvim_buf_set_option(bufnr, 'modified', false)
+          if not memo_id then
+            local ok, decoded = pcall(vim.fn.json_decode, res.body)
+            if decoded.name then
+              local entry = memos_entry_maker({ name = decoded.name, content = content })
+              setup_memo_buffer(bufnr, entry)
+              vim.notify("Memo synced (" .. decoded.name .. ")") -- TODO: use link to memo
+            end
+          else
+            vim.notify("Memo synced (" .. res.status .. ")")
           end
-          vim.notify("Memo synced successfully (" .. res.status .. ")")
+          vim.api.nvim_buf_set_option(bufnr, 'modified', false)
         else
           vim.notify("Error: " .. res.status .. " - " .. res.body)
         end
       end)
     end,
   })
-end
-
-local default_opts = {
-  default_visibility = 'PUBLIC',
-  default_state = 'STATE_UNSPECIFIED',
-  debounce_ms = 250,
-  min_characters = 3,
-  default_layout = {
-    previewer = true,
-    layout_strategy = 'vertical',
-    layout_config = {
-      width = 0.8,
-      preview_cutoff = 0,
-      height = 0.8,
-      prompt_position = "top",
-    },
-    sorting_strategy = "ascending",
-  }
-}
-
-M.setup = function(opts)
-  local opts = vim.tbl_deep_extend("force", default_opts, opts)
-  M.config = opts or {}
 end
 
 M.memos_picker = function()
@@ -223,17 +250,7 @@ M.memos_picker = function()
 
         fetch_memo_by_id(bufnr, selection.memo_id)
 
-        local title = selection.display:sub(1, 20)
-        vim.api.nvim_buf_set_name(bufnr, selection.heading or title)
-        vim.api.nvim_buf_set_option(bufnr, "filetype", "markdown") -- TODO: buftype
-        vim.api.nvim_buf_set_option(bufnr, "bufhidden", "wipe") -- delete on close
-
-        vim.api.nvim_create_autocmd("BufWriteCmd", {
-          buffer = bufnr,
-          callback = function()
-            M.sync_memo_to_api(bufnr, selection.memo_id, selection.value)
-          end,
-        })
+        setup_memo_buffer(bufnr, selection)
 
         vim.api.nvim_set_current_buf(bufnr)
       end)
@@ -242,11 +259,38 @@ M.memos_picker = function()
   }):find()
 end
 
--- in init.lua
--- vim.keymap.set('n', '<leader>mf', M.memos_picker, { desc = 'Find memo' })
--- vim.keymap.set('n', '<leader>ms', function ()
---   local bufnr = vim.api.nvim_get_current_buf()
---   M.sync_memo_to_api(bufnr, nil, {})
--- end, { desc = 'Save memo' })
+M.delete_memo = function(bufnr)
+  local bufnr = bufnr or vim.api.nvim_get_current_buf()
+  
+  local memo_id = vim.b[bufnr].memo_id
+  local pattern = "/" .. "(.*)"
+  local head = string.match(memo_id, pattern)
+  local api_url = M.MEMOS_URL .. '/api/v1/memos'
+  local url = api_url .. "/" .. head
+  local curl = require('plenary.curl')
+
+  curl.delete(url, {
+    headers = {
+      authorization = "Bearer " .. M.API_TOKEN,
+      content_type = "application/json",
+    },
+    callback = function(res)
+      vim.schedule(function()
+        if res.status >= 200 and res.status < 300 then
+          -- TODO
+          local id_to_remove = vim.b[bufnr].autocmd_id
+          if id_to_remove then
+            vim.api.nvim_del_autocmd(id_to_remove)
+            vim.b[bufnr].autocmd_id = nil
+          end
+          M.last_results = {} -- TODO: better way of doing this by removing a single entry
+          vim.notify("Deleted")
+        else
+          vim.notify("Error: " .. res.status .. " - " .. res.body)
+        end
+      end)
+    end,
+  })
+end
 
 return M
