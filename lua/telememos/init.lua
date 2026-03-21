@@ -124,7 +124,7 @@ local function setup_memo_buffer(bufnr, entry)
   local title = entry.display:sub(1, M.config.max_header_length)
   vim.api.nvim_buf_set_name(bufnr, M.config.name_prefix .. (entry.heading or title))
   vim.api.nvim_buf_set_option(bufnr, "filetype", "markdown") -- TODO: buftype
-  vim.api.nvim_buf_set_option(bufnr, "bufhidden", "wipe") -- delete on close
+  -- vim.api.nvim_buf_set_option(bufnr, "bufhidden", "wipe") -- delete on close
   vim.b[bufnr].memo_id = entry.memo_id -- linking memo using its name
 
   vim.b[bufnr].autocmd_id = vim.api.nvim_create_autocmd("BufWriteCmd", {
