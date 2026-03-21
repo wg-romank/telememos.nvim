@@ -247,6 +247,7 @@ M.memos_picker = function()
         local selection = action_state.get_selected_entry()
 
         local bufnr = vim.api.nvim_create_buf(true, false) -- listed, scratch
+        vim.api.nvim_buf_set_option(bufnr, 'bufhidden', 'hide')
 
         fetch_memo_by_id(bufnr, selection.memo_id)
 
