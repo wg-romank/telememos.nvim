@@ -32,13 +32,10 @@ M.setup = function(opts)
   M.config = opts or {}
 end
 
-local function fetch_memos(search)
+local function fetch_memos(search, cb)
   local curl = require('plenary.curl')
   local url = M.MEMOS_URL .. '/api/v1/memos'
-  local all_memos = {}
-  -- local next_page_token = ''
-  -- repeat
-  local res = curl.get(url, {
+  curl.get(url, {
     headers = {
       Authorization = "Bearer " .. M.API_TOKEN,
       ["Content-Type"] = "application/json",
@@ -46,24 +43,25 @@ local function fetch_memos(search)
     query = {
       pageSize = 20,
       filter = "content.contains('" .. search .. "')"
-    }
-  })
+    },
+    callback = function(res)
+      vim.schedule(function()
+        if res.status ~= 200 then
+          vim.notify("API Error: " .. res.status, vim.log.levels.ERROR)
+          return nil
+        end
 
-  if res.status ~= 200 then
-    vim.notify("API Error: " .. res.status, vim.log.levels.ERROR)
-    return nil
-  end
-
-  -- TODO
-  local ok, decoded = pcall(vim.fn.json_decode, res.body)
-  if decoded.memos then
-    for _, memo in ipairs(decoded.memos) do
-      table.insert(all_memos, memo)
+        local all_memos = {}
+        local ok, decoded = pcall(vim.fn.json_decode, res.body)
+        if decoded.memos then
+          for _, memo in ipairs(decoded.memos) do
+            table.insert(all_memos, memo)
+          end
+          cb(all_memos)
+        end
+      end)
     end
-  end
-  --   next_page_token = decoded.nextPageToken or ""
-  -- until next_page_token == ''
-  return all_memos
+  })
 end
 
 local function fetch_memo_by_id(bufnr, memo_id)
@@ -125,7 +123,7 @@ local function setup_memo_buffer(bufnr, entry)
   vim.api.nvim_buf_set_name(bufnr, M.config.name_prefix .. (entry.heading or title))
   vim.api.nvim_buf_set_option(bufnr, "filetype", "markdown") -- TODO: buftype
   -- vim.api.nvim_buf_set_option(bufnr, "bufhidden", "wipe") -- delete on close
-  vim.b[bufnr].memo_id = entry.memo_id -- linking memo using its name
+  vim.b[bufnr].memo_id = entry.memo_id                       -- linking memo using its name
 
   vim.b[bufnr].autocmd_id = vim.api.nvim_create_autocmd("BufWriteCmd", {
     buffer = bufnr,
@@ -198,9 +196,7 @@ M.memos_picker = function()
     prompt_title = "Memos",
     finder = finders.new_dynamic({
       fn = function(prompt)
-        M.debounce_timer:stop()
         if not prompt or #prompt < M.config.min_characters then
-          M.results_cache = {}
           M.last_processed_prompt = ""
           return M.last_results
         end
@@ -209,22 +205,25 @@ M.memos_picker = function()
           return M.last_results
         end
 
+        M.debounce_timer:stop()
         M.debounce_timer:start(M.config.debounce_ms, 0, vim.schedule_wrap(function()
-          local prompt_bufnr = vim.api.nvim_get_current_buf()
-          local current_picker = action_state.get_current_picker(prompt_bufnr)
+          fetch_memos(prompt, function(res)
+            local prompt_bufnr = vim.api.nvim_get_current_buf()
+            local current_picker = action_state.get_current_picker(prompt_bufnr)
 
-          if current_picker then
-            M.last_results = fetch_memos(prompt)
-            M.last_processed_prompt = prompt
-            current_picker:refresh()
-          end
+            if current_picker then
+              M.last_results = res
+              M.last_processed_prompt = prompt
+              current_picker:refresh()
+            end
+          end)
         end))
 
         return M.last_results
       end,
       entry_maker = memos_entry_maker
     }),
-    sorter = require("telescope.sorters").get_fzy_sorter(), --opts here?
+    -- sorter = require("telescope.sorters").get_fzy_sorter(), --opts here?
     previewer = previewers.new_buffer_previewer({
       title = "Memo Preview",
       define_preview = function(self, entry)
@@ -262,7 +261,7 @@ end
 
 M.delete_memo = function(bufnr)
   local bufnr = bufnr or vim.api.nvim_get_current_buf()
-  
+
   local memo_id = vim.b[bufnr].memo_id
   local pattern = "/" .. "(.*)"
   local head = string.match(memo_id, pattern)
